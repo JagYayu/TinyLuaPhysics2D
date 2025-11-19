@@ -7,22 +7,8 @@ local TLP2D = {}
 
 --#region Initialization
 
-local ENV_LUA_51 = 1
-local ENV_LUA_52 = 2
-local ENV_LUA_53 = 3
-local ENV_LUA_54 = 4
-local ENV_LUA_JIT = 5
-local ENV_LUA_JIT_WOS = 6 -- Lua environment of WOS game engine (Crypt of the Necrodancer: Synchrony)
-
---! Setup your environment first
-local env = ENV_LUA_JIT_WOS
-if not env then
-	error("setup your lua environment")
-end
-
---! Please carefully confirm whether the following APIs are supported by lua environment.
+--! Please carefully confirm whether the following functions are supported by lua environment.
 --! If some of them cannot be used, it may cause load error or runtime errors.
-
 local error = error
 local ipairs = ipairs
 local math_abs = math.abs
@@ -40,6 +26,21 @@ local tonumber = tonumber
 local table_concat = table.concat
 local tostring = tostring
 local type = type
+
+local ENV_LUA_51 = "Lua 5.1"
+local ENV_LUA_52 = "Lua 5.2"
+local ENV_LUA_53 = "Lua 5.3"
+local ENV_LUA_54 = "Lua 5.4"
+local ENV_LUA_JIT = "LuaJIT"
+local ENV_LUA_JIT_WOS = "LuaJIT-WOS" -- Lua environment of WOS game engine (Crypt of the Necrodancer: Synchrony)
+
+--! Setup your environment first
+local env = select(1, { ... }) or _VERSION
+if env then
+	error("please modify the source code of 'TinyLuaPhysics2D':\
+	locate the line where this error occurred, find the `env` variable above,\
+	then manually setup your lua environment.")
+end
 
 --- @class (exact) TLP2D.Vector
 --- @field [1] number
@@ -331,7 +332,9 @@ function TLP2D.DynAABBTree.new() end
 --- @readonly
 TLP2D.Collision = {}
 
--- min x min y max x max y
+--- @param aabb1 TLP2D.Rectangle
+--- @param aabb2 TLP2D.Rectangle
+--- @return boolean
 function TLP2D.Collision.checkAABB(aabb1, aabb2)
 	return not (aabb1[3] <= aabb2[1] or aabb2[3] <= aabb1[1] or aabb1[4] <= aabb2[2] or aabb2[4] <= aabb1[2])
 end
