@@ -36,7 +36,7 @@ local ENV_LUA_JIT_WOS = "LuaJIT-WOS" -- Lua environment of WOS game engine (Cryp
 
 --! Setup your environment first
 local env = select(1, { ... }) or _VERSION
-if env then
+if not env then
 	error("please modify the source code of 'TinyLuaPhysics2D':\
 	locate the line where this error occurred, find the `env` variable above,\
 	then manually setup your lua environment.")
