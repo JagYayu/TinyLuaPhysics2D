@@ -1,5 +1,11 @@
-﻿--- A tiny 2d physics engine written in lua.
---- Nov 2025, v0.1
+﻿--- [TinyLuaPhysics2D](https://github.com/JagYayu/TinyLuaPhysics2D)
+--- A tiny 2d physics engine written in lua, licensed under WTFPL.
+--- Nov 2025, v0.3
+---
+--- ### Modules that not implement yet
+--- * DynAABBTree
+--- * SpatialHashMap
+---
 --- @author JagYayu
 --- @readonly
 --- @class TLP2D
@@ -18,6 +24,7 @@ local math_floor = math.floor
 local math_huge = math.huge
 local math_max = math.max
 local math_min = math.min
+local math_pi = math.pi
 local math_sin = math.sin
 local math_sqrt = math.sqrt
 local pcall = pcall
@@ -246,13 +253,17 @@ function TLP2D.Utils.emptyFunction() end
 
 local TLP2D_Utils_emptyFunction = TLP2D.Utils.emptyFunction
 
+TLP2D.Utils.emptyTable = setmetatable({}, { __newindex = TLP2D_Utils_emptyFunction })
+
+local TLP2D_Utils_emptyTable = TLP2D.Utils.emptyTable
+
 --- @generic T
 --- @param list T[]
 --- @param value T
 --- @return integer?
 function TLP2D.Utils.listFastRemoveFirst(list, value)
-	for i, v in ipairs(list) do
-		if v == value then
+	for i = 1, #list do
+		if list[i] == value then
 			list[i] = list[#list]
 			list[#list] = nil
 
@@ -260,6 +271,8 @@ function TLP2D.Utils.listFastRemoveFirst(list, value)
 		end
 	end
 end
+
+local TLP2D_Utils_listFastRemoveFirst = TLP2D.Utils.listFastRemoveFirst
 
 local serializeNumberArrayList = {}
 
@@ -327,6 +340,288 @@ function TLP2D.DynAABBTree.new() end
 
 --#endregion
 
+--#region SpatialHashMap
+
+--- TODO NOT DONE YET
+--- @class TLP2D.SpatialHashMap
+TLP2D.SpatialHashMap = {}
+
+local spatialHashMapMetatable = { __index = TLP2D.SpatialHashMap }
+
+--- @param gridSize integer
+--- @return TLP2D.SpatialHashMap
+function TLP2D.SpatialHashMap.new(gridSize)
+	--- @class (exact) TLP2D.SpatialHashMapKey : integer
+
+	--- @class (exact) TLP2D.SpatialHashMapGrid
+	--- @field list TLP2D.SpatialHashMapElement[]
+	--- @field set table<TLP2D.SpatialHashMapElementID, integer>
+
+	--- @class TLP2D.SpatialHashMap
+	local spatialHashMap = {}
+
+	--- @package
+	spatialHashMap._gridSize = gridSize
+
+	--- @package
+	spatialHashMap._invGridSize = 1 / gridSize
+
+	--- @package
+	--- @class TLP2D.SpatialHashMapElementID : integer
+	spatialHashMap._elementLatestID = 0
+
+	--- @package
+	--- @type table<TLP2D.SpatialHashMapElementID, TLP2D.SpatialHashMapElement>
+	spatialHashMap._elements = {}
+
+	--- @package
+	--- @type table<TLP2D.SpatialHashMapKey, TLP2D.SpatialHashMapGrid>
+	spatialHashMap._gridMap = {}
+
+	setmetatable(spatialHashMap, spatialHashMapMetatable)
+
+	return spatialHashMap
+end
+
+function TLP2D.SpatialHashMap:clearElements()
+	self._elementLatestID = 0
+	self._elements = {}
+	self._gridMap = {}
+end
+
+--- @param x number
+--- @param y number
+--- @return integer gridX
+--- @return integer gridY
+--- @nodiscard
+function TLP2D.SpatialHashMap:reducePosition(x, y)
+	local invSize = self._invGridSize
+	return math_floor(x * invSize), math_floor(y * invSize)
+end
+
+--- @param gridX integer
+--- @param gridY integer
+--- @return number x
+--- @return number y
+--- @nodiscard
+function TLP2D.SpatialHashMap:unwrapPosition(gridX, gridY)
+	local size = self._gridSize
+	return gridX * size, gridY * size
+end
+
+--- @param gridX number
+--- @param gridY number
+--- @return TLP2D.SpatialHashMapKey hashKey
+--- @nodiscard
+function TLP2D.SpatialHashMap:hashGrid(gridX, gridY)
+	return gridX * 73856093 + gridY * 19349663
+end
+
+--- @param posX any
+--- @param posY any
+--- @return TLP2D.SpatialHashMapKey hashKey
+function TLP2D.SpatialHashMap:hashPosition(posX, posY)
+	local invSize = self._invGridSize
+	local gridX = math_floor(posX * invSize)
+	local gridY = math_floor(posY * invSize)
+	return gridX * 73856093 + gridY * 19349663
+end
+
+function TLP2D.SpatialHashMap:getGridSize()
+	return self._gridSize
+end
+
+--- @param self TLP2D.SpatialHashMap
+--- @param elementID TLP2D.SpatialHashMapElementID
+--- @param element TLP2D.SpatialHashMapElement
+--- @param minX number
+--- @param minY number
+--- @param maxX number
+--- @param maxY number
+local function spatialHashMapEmplaceElement(self, elementID, element, minX, minY, maxX, maxY)
+	local hashKeyList = element.hashKeyList
+	local hashKeySet = element.hashKeySet
+
+	do
+		local invGridSize = self._invGridSize
+		local minGridX = math_floor(minX * invGridSize)
+		local minGridY = math_floor(minY * invGridSize)
+		local maxGridX = math_floor(maxX * invGridSize)
+		local maxGridY = math_floor(maxY * invGridSize)
+
+		for gy = minGridY, maxGridY do
+			for gx = minGridX, maxGridX do
+				local hashKey = self:hashGrid(gx, gy)
+				if not hashKeySet[hashKey] then
+					local index = #hashKeyList + 1
+					hashKeyList[index] = hashKey
+					hashKeySet[hashKey] = index
+				end
+			end
+		end
+	end
+
+	do
+		local gridMap = self._gridMap
+
+		for _, hashKey in ipairs(element.hashKeyList) do
+			gridMap[hashKey] = gridMap[hashKey] or {
+				list = {},
+				set = {},
+			}
+			local grid = gridMap[hashKey]
+			local index = #grid.list + 1
+			grid.list[index] = element
+			grid.set[elementID] = index
+		end
+	end
+end
+
+--- @return TLP2D.SpatialHashMapElementID
+--- @nodiscard
+function TLP2D.SpatialHashMap:addElement(customData)
+	local elementID = self._elementLatestID + 1
+	self._elementLatestID = elementID
+
+	--- @class (exact) TLP2D.SpatialHashMapElement
+	--- @field elementID TLP2D.SpatialHashMapElementID
+	--- @field customData any
+	--- @field hashKeyList TLP2D.SpatialHashMapKey[]
+	--- @field hashKeySet table<TLP2D.SpatialHashMapKey, integer>
+	local element = {
+		elementID = elementID,
+		customData = customData,
+		hashKeyList = {},
+		hashKeySet = {},
+	}
+
+	self._elements[elementID] = element
+
+	return elementID
+end
+
+--- @param minX number
+--- @param minY number
+--- @param maxX number
+--- @param maxY number
+--- @return TLP2D.SpatialHashMapElementID
+--- @nodiscard
+function TLP2D.SpatialHashMap:insertElement(minX, minY, maxX, maxY, customData)
+	local elementID = self:addElement(customData)
+
+	spatialHashMapEmplaceElement(self, elementID, self._elements[elementID], minX, minY, maxX, maxY)
+
+	return elementID
+end
+
+--- @param elementID TLP2D.SpatialHashMapElementID
+--- @return boolean
+--- @nodiscard
+function TLP2D.SpatialHashMap:containsElement(elementID)
+	return not not self._elements[elementID]
+end
+
+--- @param self TLP2D.SpatialHashMap
+--- @param elementID TLP2D.SpatialHashMapElementID
+--- @param element TLP2D.SpatialHashMapElement
+local function spatialHashMapEraseElement(self, elementID, element)
+	local gridMap = self._gridMap
+	local hashKeyList = element.hashKeyList
+	local hashKeySet = element.hashKeySet
+
+	for i = #hashKeyList, 1, -1 do
+		local grid = gridMap[hashKeyList[i]]
+		local gridList = grid.list
+		local gridSet = grid.set
+		local removeIndex = gridSet[elementID]
+		if removeIndex then
+			local lastIndex = #gridList
+			if removeIndex ~= lastIndex then
+				local movedElement = gridList[lastIndex]
+				gridList[removeIndex] = movedElement
+				gridSet[movedElement.elementID] = removeIndex
+			end
+			gridList[lastIndex] = nil
+			gridSet[elementID] = nil
+		end
+	end
+end
+
+--- @param elementID TLP2D.SpatialHashMapElementID
+--- @param minX number
+--- @param minY number
+--- @param maxX number
+--- @param maxY number
+--- @return boolean
+function TLP2D.SpatialHashMap:updateElement(elementID, minX, minY, maxX, maxY)
+	local element = self._elements[elementID]
+	if element then
+		spatialHashMapEraseElement(self, elementID, element)
+		spatialHashMapEmplaceElement(self, elementID, element, minX, minY, maxX, maxY)
+
+		return true
+	else
+		return false
+	end
+end
+
+--- @param elementID TLP2D.SpatialHashMapElementID
+--- @return boolean
+function TLP2D.SpatialHashMap:removeElement(elementID)
+	local element = self._elements[elementID]
+	if element then
+		spatialHashMapEraseElement(self, elementID, element)
+		self._elements[elementID] = nil
+
+		return true
+	else
+		return false
+	end
+end
+
+--- @param gridX integer
+--- @param gridY integer
+--- @return fun(table: TLP2D.SpatialHashMapElement[], i?: integer): (integer, TLP2D.SpatialHashMapElement), TLP2D.SpatialHashMapElement[], integer
+--- @nodiscard
+function TLP2D.SpatialHashMap:iterateGrid(gridX, gridY)
+	local hashKey = self:hashGrid(gridX, gridY)
+	local grid = self._gridMap[hashKey]
+	if grid then
+		return ipairs(grid.list)
+	else
+		return ipairs(TLP2D_Utils_emptyTable)
+	end
+end
+
+--- @param posX integer
+--- @param posY integer
+--- @return fun(table: TLP2D.SpatialHashMapElement[], i?: integer): (integer, TLP2D.SpatialHashMapElement), TLP2D.SpatialHashMapElement[], integer
+--- @nodiscard
+function TLP2D.SpatialHashMap:iteratePosition(posX, posY)
+	local hashKey = self:hashPosition(posX, posY)
+	local grid = self._gridMap[hashKey]
+	if grid then
+		return ipairs(grid.list)
+	else
+		return ipairs(TLP2D_Utils_emptyTable)
+	end
+end
+
+function TLP2D.SpatialHashMap:setGridSize()
+	-- TODO
+end
+
+function TLP2D.SpatialHashMap:clearCaches()
+	local gridMap = self._gridMap
+	for hashKey, grid in pairs(gridMap) do
+		if not grid.list[1] then
+			gridMap[hashKey] = nil
+		end
+	end
+end
+
+--#endregion
+
 --#region Collision
 
 --- @readonly
@@ -334,22 +629,12 @@ TLP2D.Collision = {}
 
 --- @param aabb1 TLP2D.Rectangle
 --- @param aabb2 TLP2D.Rectangle
---- @return boolean
+--- @return boolean hasCollision
 function TLP2D.Collision.checkAABB(aabb1, aabb2)
 	return not (aabb1[3] <= aabb2[1] or aabb2[3] <= aabb1[1] or aabb1[4] <= aabb2[2] or aabb2[4] <= aabb1[2])
 end
 
 local TLP2D_Collision_checkAABB = TLP2D.Collision.checkAABB
-
---- @class (exact) TLP2D.IntersectionResult
---- @field normalX number
---- @field normalY number
---- @field depth number
-local intersectResult = {
-	normalX = 0,
-	normalY = 0,
-	depth = 0,
-}
 
 --- @param x1 number
 --- @param y1 number
@@ -370,17 +655,17 @@ end
 --- @param x2 number
 --- @param y2 number
 --- @param r2 number
---- @return TLP2D.IntersectionResult?
+--- @return number? depth
+--- @return number normalX
+--- @return number normalY
 function TLP2D.Collision.intersectCircleWithCircle(x1, y1, r1, x2, y2, r2)
 	local distance = TLP2D_Vector_distance(x1, y1, x2, y2)
 	local radii = r1 + r2
-	if distance >= radii then
-		return
+	if radii > distance then
+		return radii - distance, TLP2D_Vector_normalize(x2 - x1, y2 - y1)
+	else
+		return nil, 0, 0
 	end
-
-	intersectResult.normalX, intersectResult.normalY = TLP2D_Vector_normalize(x2 - x1, y2 - y1)
-	intersectResult.depth = radii - distance
-	return intersectResult
 end
 
 local TLP2D_Collision_intersectCircleWithCircle = TLP2D.Collision.intersectCircleWithCircle
@@ -394,7 +679,8 @@ local function collisionProjectPolygonToAxis(axisX, axisY, vertices)
 	local min = math_huge
 	local max = -math_huge
 
-	for _, vertex in ipairs(vertices) do
+	for i = 1, #vertices do
+		local vertex = vertices[i]
 		local proj = TLP2D_Vector_dot(vertex[1], vertex[2], axisX, axisY)
 		if proj < min then
 			min = proj
@@ -407,13 +693,14 @@ local function collisionProjectPolygonToAxis(axisX, axisY, vertices)
 	return min, max
 end
 
---- @generic T...
+--- @generic T1, T2, T3
 --- @param intersectSATHandle function
 --- @param vertices TLP2D.Vertex[]
---- @param projectShapeToAxis fun(...: T..., axisX: number, axisY: number)
---- @parma ... T...
+--- @param projectShapeToAxis fun(axisX: number, axisY: number, param1: T1, param2: T2, param3: T3)
+--- @parma param1 T1
+--- @parma param2 T2
 --- @return boolean
-local function collisionStepPolygonSAT(intersectSATHandle, vertices, projectShapeToAxis, ...)
+local function collisionStepPolygonSAT(intersectSATHandle, vertices, projectShapeToAxis, param1, param2, param3)
 	local verticesCount = #vertices
 	for i = 1, verticesCount do
 		local vertex1 = vertices[i]
@@ -421,7 +708,7 @@ local function collisionStepPolygonSAT(intersectSATHandle, vertices, projectShap
 		local axisX, axisY = TLP2D_Vector_normalize(vertex1[2] - vertex2[2], vertex2[1] - vertex1[1])
 
 		local min1, max1 = collisionProjectPolygonToAxis(axisX, axisY, vertices)
-		local min2, max2 = projectShapeToAxis(axisX, axisY, ...)
+		local min2, max2 = projectShapeToAxis(axisX, axisY, param1, param2, param3)
 		if min1 > max2 or min2 > max1 then
 			return false
 		end
@@ -440,6 +727,10 @@ function TLP2D.Collision.checkPolygonWithPolygon(vertices1, vertices2)
 		and collisionStepPolygonSAT(TLP2D_Utils_emptyFunction, vertices2, collisionProjectPolygonToAxis, vertices1)
 end
 
+local intersectionPolygonSATDepth = 0
+local intersectionPolygonSATNormalX = 0
+local intersectionPolygonSATNormalY = 0
+
 --- @param axisX number
 --- @param axisY number
 --- @param min1 number
@@ -448,18 +739,20 @@ end
 --- @param max2 number
 local function collisionStepPolygonSATIntersectResultHandle(axisX, axisY, min1, max1, min2, max2)
 	local depth = math_min(max2 - min1, max1 - min2)
-	if depth < intersectResult.depth then
-		intersectResult.depth = depth
-		intersectResult.normalX = axisX
-		intersectResult.normalY = axisY
+	if depth < intersectionPolygonSATDepth then
+		intersectionPolygonSATDepth = depth
+		intersectionPolygonSATNormalX = axisX
+		intersectionPolygonSATNormalY = axisY
 	end
 end
 
 --- @param vertices1 TLP2D.Vertex[]
 --- @param vertices2 TLP2D.Vertex[]
---- @return TLP2D.IntersectionResult?
+--- @return number? depth
+--- @return number normalX
+--- @return number normalY
 function TLP2D.Collision.intersectPolygonWithPolygon(x1, y1, vertices1, x2, y2, vertices2)
-	intersectResult.depth = math_huge
+	intersectionPolygonSATDepth = math_huge
 	if
 		collisionStepPolygonSAT(
 			collisionStepPolygonSATIntersectResultHandle,
@@ -474,17 +767,14 @@ function TLP2D.Collision.intersectPolygonWithPolygon(x1, y1, vertices1, x2, y2, 
 			vertices1
 		)
 	then
-		local normalX = intersectResult.normalX
-		local normalY = intersectResult.normalY
-
-		if TLP2D_Vector_dot(x2 - x1, y2 - y1, normalX, normalY) < 0 then
-			normalX = -normalX
-			normalY = -normalY
+		if TLP2D_Vector_dot(x2 - x1, y2 - y1, intersectionPolygonSATNormalX, intersectionPolygonSATNormalY) < 0 then
+			intersectionPolygonSATNormalX = -intersectionPolygonSATNormalX
+			intersectionPolygonSATNormalY = -intersectionPolygonSATNormalY
 		end
-		intersectResult.normalX = normalX
-		intersectResult.normalY = normalY
 
-		return intersectResult
+		return intersectionPolygonSATDepth, intersectionPolygonSATNormalX, intersectionPolygonSATNormalY
+	else
+		return nil, 0, 0
 	end
 end
 
@@ -516,7 +806,8 @@ local function collisionFindClosestVertexToPointOnPolygonAxis(vertices, x, y)
 	local vertexIndex
 	local minDistance = math_huge
 
-	for i, vertex in ipairs(vertices) do
+	for i = 1, #vertices do
+		local vertex = vertices[i]
 		local distance = TLP2D_Vector_distance(vertex[1], vertex[2], x, y)
 		if distance < minDistance then
 			minDistance = distance
@@ -534,9 +825,11 @@ end
 --- @param x2 number
 --- @param y2 number
 --- @param r2 number
---- @return TLP2D.IntersectionResult?
+--- @return number? depth
+--- @return number normalX
+--- @return number normalY
 function TLP2D.Collision.intersectPolygonWithCircle(x1, y1, vertices1, x2, y2, r2)
-	intersectResult.depth = math_huge
+	intersectionPolygonSATDepth = math_huge
 	if
 		collisionStepPolygonSAT(
 			collisionStepPolygonSATIntersectResultHandle,
@@ -551,28 +844,24 @@ function TLP2D.Collision.intersectPolygonWithCircle(x1, y1, vertices1, x2, y2, r
 		local min1, max1 = collisionProjectPolygonToAxis(axisX, axisY, vertices1)
 		local min2, max2 = collisionProjectCircleToAxis(axisX, axisY, x2, y2, r2)
 		if min1 > max2 or min2 > max1 then
-			return
+			return nil, 0, 0
 		end
-
-		local normalX = intersectResult.normalX
-		local normalY = intersectResult.normalY
 
 		local depth = math_min(max2 - min1, max1 - min2)
-		if depth < intersectResult.depth then
-			intersectResult.depth = depth
-			normalX = axisX
-			normalY = axisY
+		if depth < intersectionPolygonSATDepth then
+			intersectionPolygonSATDepth = depth
+			intersectionPolygonSATNormalX = axisX
+			intersectionPolygonSATNormalY = axisY
 		end
 
-		if TLP2D_Vector_dot(x1 - x2, y1 - y2, normalX, normalY) < 0 then
-			normalX = -normalX
-			normalY = -normalY
+		if TLP2D_Vector_dot(x1 - x2, y1 - y2, intersectionPolygonSATNormalX, intersectionPolygonSATNormalY) < 0 then
+			intersectionPolygonSATNormalX = -intersectionPolygonSATNormalX
+			intersectionPolygonSATNormalY = -intersectionPolygonSATNormalY
 		end
 
-		intersectResult.normalX = normalX
-		intersectResult.normalY = normalY
-
-		return intersectResult
+		return intersectionPolygonSATDepth, intersectionPolygonSATNormalX, intersectionPolygonSATNormalY
+	else
+		return nil, 0, 0
 	end
 end
 
@@ -612,14 +901,14 @@ local function contactStepPolygonWithPolygon(vertices1, vertices2, minSqDist)
 	local contactVector1 = contactResult.list[1]
 	local contactVector2 = contactResult.list[2]
 
-	for _, point in ipairs(vertices1) do
-		local pointX = point[1]
-		local pointY = point[2]
+	for i1 = 1, #vertices1 do
+		local pointX = vertices1[i1][1]
+		local pointY = vertices1[i1][2]
 		local vertex2Count = #vertices2
 
-		for i = 1, #vertices2 do
-			local vertex1 = vertices2[i]
-			local vertex2 = vertices2[i == vertex2Count and 1 or i + 1]
+		for i2 = 1, #vertices2 do
+			local vertex1 = vertices2[i2]
+			local vertex2 = vertices2[i2 == vertex2Count and 1 or i2 + 1]
 			local x, y, sqDist = TLP2D_Vector_findClosestPointToSegment( --
 				pointX,
 				pointY,
@@ -809,22 +1098,22 @@ end
 --- @return TLP2D.MaterialID
 --- @nodiscard
 function TLP2D.Material.getID(material)
-	local material = materials[material]
-	if not material then
-		materialNotFound(material)
+	local material_ = materials[material]
+	if not material_ then
+		materialNotFound(material_)
 	end
-	return material.id
+	return material_.id
 end
 
 --- @param material TLP2D.MaterialID | string
 --- @return string
 --- @nodiscard
 function TLP2D.Material.getName(material)
-	local material = materials[material]
-	if not material then
-		materialNotFound(material)
+	local material_ = materials[material]
+	if not material_ then
+		materialNotFound(material_)
 	end
-	return material.name
+	return material_.name
 end
 
 --- @param material TLP2D.MaterialID | string
@@ -930,21 +1219,21 @@ TLP2D.Shape.Type = {
 	Circle = 1,
 	Rectangle = 2,
 	Polygon = 3,
-	PredefPolygon = 4,
+	-- PredefPolygon = 4,
 }
 
 local TLP2D_Shape_Type_None = TLP2D.Shape.Type.None
 local TLP2D_Shape_Type_Circle = TLP2D.Shape.Type.Circle
 local TLP2D_Shape_Type_Rectangle = TLP2D.Shape.Type.Rectangle
 local TLP2D_Shape_Type_Polygon = TLP2D.Shape.Type.Polygon
-local TLP2D_Shape_Type_PredefPolygon = TLP2D.Shape.Type.PredefPolygon
+-- local TLP2D_Shape_Type_PredefPolygon = TLP2D.Shape.Type.PredefPolygon
 
 --- @type table<string, TLP2D.PredefinedPolygon> | TLP2D.PredefinedPolygon[]
 local shapePredefinedPolygons = {}
 --- @type integer
 local shapePredefinedPolygonID = 0
 
-function TLP2D.Shape.resetPredefinedPolygons()
+function TLP2D.Shape.reset()
 	shapePredefinedPolygons = {}
 	shapePredefinedPolygonID = 0
 end
@@ -1031,7 +1320,7 @@ TLP2D.Body.DefaultMaterial = materialDefault.id
 TLP2D.Body.DefaultShape = TLP2D_Shape_Type_None
 TLP2D.Body.DefaultShapeData = 0
 
---- @alias TLP2D.BodyShapeDataNone false
+--- @alias TLP2D.BodyShapeDataNone 0
 
 --- @alias TLP2D.BodyShapeDataCircle number
 
@@ -1077,6 +1366,7 @@ local function TLP2D_Body_create(bodyID, bodyType, materialID, shape, shapeData)
 	--- @field needUpdateAngularMass boolean @Fields: angularMass, invAngularMass
 	--- @field angularMass number
 	--- @field invAngularMass number
+	--- @field spatialHashMapElementID TLP2D.SpatialHashMapElementID?
 	local bodyCache = {
 		needUpdateTransform = true,
 		transformedVertices = {},
@@ -1094,7 +1384,7 @@ end
 
 --- @param bodyData TLP2D.BodyData
 --- @param bodyCache TLP2D.BodyCache
-local function bodyUpdateCircleTransformCache(bodyData, bodyCache)
+local function bodyUpdateCircleTransform(bodyData, bodyCache)
 	bodyCache.transformedVertices[1] = nil
 	local aabb = bodyCache.transformedAABB
 
@@ -1113,7 +1403,8 @@ local function bodyUpdatePolygonTransformedAABBCache(aabb, vertices)
 	local maxX = -math_huge
 	local maxY = -math_huge
 
-	for _, vertex in ipairs(vertices) do
+	for i = 1, #vertices do
+		local vertex = vertices[i]
 		local x = vertex[1]
 		local y = vertex[2]
 		if x < minX then
@@ -1138,9 +1429,8 @@ end
 
 --- @param bodyData TLP2D.BodyData
 --- @param bodyCache TLP2D.BodyCache
-local function bodyUpdateRectangleTransformCache(bodyData, bodyCache)
+local function bodyUpdateRectangleTransform(bodyData, bodyCache)
 	local vertices = bodyCache.transformedVertices
-
 	local verticesCount = #vertices
 	if verticesCount > 4 then
 		for i = verticesCount, 5, -1 do
@@ -1154,28 +1444,77 @@ local function bodyUpdateRectangleTransformCache(bodyData, bodyCache)
 
 	local positionX = bodyData[BODY_DATA_POSITION_X]
 	local positionY = bodyData[BODY_DATA_POSITION_Y]
-	local cos = math_cos(bodyData[BODY_DATA_ROTATION])
-	local sin = math_sin(bodyData[BODY_DATA_ROTATION])
+	local cos, sin
+	do
+		local rotation = bodyData[BODY_DATA_ROTATION]
+		cos = math_cos(rotation)
+		sin = math_sin(rotation)
+	end
 	local shapeData = bodyData[BODY_DATA_SHAPE_DATA]
 	local halfWidth = shapeData[1] * 0.5
 	local halfHeight = shapeData[2] * 0.5
 
-	vertices[1][1] = positionX + halfWidth * cos - halfHeight * sin
-	vertices[1][2] = positionY + halfWidth * sin + halfHeight * cos
-	vertices[2][1] = positionX + -halfWidth * cos - halfHeight * sin
-	vertices[2][2] = positionY + -halfWidth * sin + halfHeight * cos
-	vertices[3][1] = positionX + -halfWidth * cos - -halfHeight * sin
-	vertices[3][2] = positionY + -halfWidth * sin + -halfHeight * cos
-	vertices[4][1] = positionX + halfWidth * cos - -halfHeight * sin
-	vertices[4][2] = positionY + halfWidth * sin + -halfHeight * cos
+	local vertex = vertices[1]
+	vertex[1] = positionX + halfWidth * cos - halfHeight * sin
+	vertex[2] = positionY + halfWidth * sin + halfHeight * cos
+	vertex = vertices[2]
+	vertex[1] = positionX + -halfWidth * cos - halfHeight * sin
+	vertex[2] = positionY + -halfWidth * sin + halfHeight * cos
+	vertex = vertices[3]
+	vertex[1] = positionX + -halfWidth * cos - -halfHeight * sin
+	vertex[2] = positionY + -halfWidth * sin + -halfHeight * cos
+	vertex = vertices[4]
+	vertex[1] = positionX + halfWidth * cos - -halfHeight * sin
+	vertex[2] = positionY + halfWidth * sin + -halfHeight * cos
+
+	bodyUpdatePolygonTransformedAABBCache(bodyCache.transformedAABB, vertices)
+end
+
+--- @param bodyData TLP2D.BodyData
+--- @param bodyCache TLP2D.BodyCache
+local function bodyUpdatePolygonTransform(bodyData, bodyCache)
+	local vertices = bodyCache.transformedVertices
+	local shapeData = bodyData[BODY_DATA_SHAPE_DATA]
+	local count = #shapeData
+
+	if #vertices > count then
+		for i = #vertices, count + 1, -1 do
+			vertices[i] = nil
+		end
+	elseif #vertices < count then
+		for i = #vertices + 1, count do
+			vertices[i] = { 0, 0 }
+		end
+	end
+
+	local positionX = bodyData[BODY_DATA_POSITION_X]
+	local positionY = bodyData[BODY_DATA_POSITION_Y]
+	local cos, sin
+	do
+		local rotation = bodyData[BODY_DATA_ROTATION]
+		cos = math_cos(rotation)
+		sin = math_sin(rotation)
+	end
+
+	local vertex
+	for i = 1, count do
+		local localVertex = shapeData[i]
+		local x = localVertex[1]
+		local y = localVertex[2]
+
+		vertex = vertices[i]
+		vertex[1] = positionX + x * cos - y * sin
+		vertex[2] = positionY + x * sin + y * cos
+	end
 
 	bodyUpdatePolygonTransformedAABBCache(bodyCache.transformedAABB, vertices)
 end
 
 --- @type table<TLP2D.BodyShape, fun(bodyData: TLP2D.BodyData, bodyCache: TLP2D.BodyCache)>
 local bodyUpdateTransformFunctions = {
-	bodyUpdateCircleTransformCache, -- Circle
-	bodyUpdateRectangleTransformCache, -- Rectangle
+	bodyUpdateCircleTransform, -- Circle
+	bodyUpdateRectangleTransform, -- Rectangle
+	bodyUpdatePolygonTransform, -- Polygon
 }
 
 --- @param bodyData TLP2D.BodyData
@@ -1210,13 +1549,68 @@ end
 
 --- @param bodyData TLP2D.BodyData
 --- @param bodyCache TLP2D.BodyCache
+local function bodyUpdateMassCircleShape(bodyData, bodyCache)
+	local r = bodyData[BODY_DATA_SHAPE_DATA]
+	local mass = math_pi * r * r * TLP2D_Material_getDensity(bodyData[BODY_DATA_MATERIAL])
+	bodyCache.mass = mass
+	bodyCache.invMass = 1 / mass
+end
+
+--- @param bodyData TLP2D.BodyData
+--- @param bodyCache TLP2D.BodyCache
+local function bodyUpdateMassRectangleShape(bodyData, bodyCache)
+	local size = bodyData[BODY_DATA_SHAPE_DATA]
+	local mass = size[1] * size[2] * TLP2D_Material_getDensity(bodyData[BODY_DATA_MATERIAL])
+	bodyCache.mass = mass
+	bodyCache.invMass = 1 / mass
+end
+
+--- @param bodyData TLP2D.BodyData
+--- @param bodyCache TLP2D.BodyCache
+local function bodyUpdateMassPolygonShape(bodyData, bodyCache)
+	local vertices = bodyData[BODY_DATA_SHAPE_DATA]
+	if #vertices < 3 then
+		bodyCache.mass = 0
+		bodyCache.invMass = 0
+
+		return
+	end
+
+	local area = 0
+	local count = #vertices
+	local vertex
+	for i = 1, count do
+		vertex = vertices[i]
+		local x1 = vertex[1]
+		local y1 = vertex[2]
+		vertex = vertices[i == count and 1 or (i + 1)]
+		local x2 = vertex[1]
+		local y2 = vertex[2]
+		area = area + (x1 * y2 - y1 * x2)
+	end
+
+	local mass = area * 0.5 * TLP2D_Material_getDensity(bodyData[BODY_DATA_MATERIAL])
+	bodyCache.mass = mass
+	bodyCache.invMass = 1 / mass
+end
+
+local bodyUpdateMassFunctions = {
+	bodyUpdateMassCircleShape, -- Circle
+	bodyUpdateMassRectangleShape, -- Rectangle
+	bodyUpdateMassPolygonShape, -- Polygon
+}
+
+--- @param bodyData TLP2D.BodyData
+--- @param bodyCache TLP2D.BodyCache
 local function bodyUpdateMass(bodyData, bodyCache)
 	if bodyData[BODY_DATA_TYPE] == TLP2D_Body_Type_Static then
 		bodyCache.mass = 0
 		bodyCache.invMass = 0
 	else
-		bodyCache.mass = TLP2D_Material_getDensity(bodyData[BODY_DATA_MATERIAL]) * 1
-		bodyCache.invMass = 1 / bodyCache.mass
+		local func = bodyUpdateMassFunctions[bodyData[BODY_DATA_SHAPE]]
+		if func then
+			func(bodyData, bodyCache)
+		end
 	end
 end
 
@@ -1238,7 +1632,7 @@ end
 local function bodyUpdateAngularMassCircleShape(bodyData, bodyCache)
 	local mass = TLP2D_Body_getMass(bodyData, bodyCache)
 	local radius = bodyData[BODY_DATA_SHAPE_DATA]
-	local angularMass = (1 / 2) * mass * radius * radius
+	local angularMass = 0.5 * mass * radius * radius
 	bodyCache.angularMass = angularMass
 	bodyCache.invAngularMass = 1 / angularMass
 end
@@ -1254,10 +1648,81 @@ local function bodyUpdateAngularMassRectangleShape(bodyData, bodyCache)
 	bodyCache.invAngularMass = 1 / angularMass
 end
 
+--- @param bodyData TLP2D.BodyData
+--- @param bodyCache TLP2D.BodyCache
+local function bodyUpdateAngularMassPolygonShape(bodyData, bodyCache)
+	local vertices = bodyData[BODY_DATA_SHAPE_DATA]
+	local count = #vertices
+	if count < 3 then
+		bodyCache.angularMass = 0
+		bodyCache.invAngularMass = 0
+
+		return
+	end
+
+	local area2 = 0
+	local cx_num = 0
+	local cy_num = 0
+	local I_orig = 0
+	for i = 1, count do
+		local j = i == count and 1 or (i + 1)
+		local xi = vertices[i][1]
+		local yi = vertices[i][2]
+		local xj = vertices[j][1]
+		local yj = vertices[j][2]
+
+		local cross = xi * yj - xj * yi
+		area2 = area2 + cross
+
+		cx_num = cx_num + (xi + xj) * cross
+		cy_num = cy_num + (yi + yj) * cross
+
+		local xi2 = xi * xi
+		local xj2 = xj * xj
+		local yi2 = yi * yi
+		local yj2 = yj * yj
+
+		I_orig = I_orig + cross * (xi2 + xi * xj + xj2 + yi2 + yi * yj + yj2)
+	end
+
+	local area = 0.5 * area2
+	if area == 0 or math_abs(area) < epsilon then
+		bodyCache.angularMass = 0
+		bodyCache.invAngularMass = 0
+
+		return
+	end
+
+	local mass = TLP2D_Body_getMass(bodyData, bodyCache)
+	local density = TLP2D_Material_getDensity(bodyData[BODY_DATA_MATERIAL])
+
+	-- unholy math
+	local I_area_orig = I_orig / 12.0
+	local I_about_origin = density * I_area_orig
+	local cx = cx_num / (6 * area)
+	local cy = cy_num / (6 * area)
+	local d2 = cx * cx + cy * cy
+	local I_centroid = I_about_origin - mass * d2
+	if I_centroid < 0 and I_centroid > -epsilon then
+		I_centroid = 0
+	end
+	if I_centroid < 0 then
+		I_centroid = math_abs(I_centroid)
+	end
+	local invInertia = 0
+	if I_centroid > 0 then
+		invInertia = 1 / I_centroid
+	end
+
+	bodyCache.angularMass = I_centroid
+	bodyCache.invAngularMass = invInertia
+end
+
 --- @type table<TLP2D.BodyType, fun(bodyData: TLP2D.BodyData, bodyCache: TLP2D.BodyCache)>
 local bodyUpdateAngularMassFunctions = {
 	bodyUpdateAngularMassCircleShape, -- Circle
 	bodyUpdateAngularMassRectangleShape, -- Rectangle
+	bodyUpdateAngularMassPolygonShape, -- Polygon
 }
 
 --- @param bodyData TLP2D.BodyData
@@ -1368,6 +1833,13 @@ local function bodyGetCombinedRestitution(bodyData1, bodyData2)
 	)
 end
 
+--- @param bodyData1 TLP2D.BodyData
+--- @param bodyCache1 TLP2D.BodyCache
+--- @param bodyData2 TLP2D.BodyData
+--- @param bodyCache2 TLP2D.BodyCache
+--- @param normalX number
+--- @param normalY number
+--- @param depth number
 local function bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, depth)
 	if bodyData1[BODY_DATA_TYPE] == TLP2D_Body_Type_Static then
 		if bodyData2[BODY_DATA_TYPE] == TLP2D_Body_Type_Static then
@@ -1420,7 +1892,6 @@ local function bodyVelocityConstraintsKinematic(
 	end
 
 	local e = bodyGetCombinedRestitution(bodyData1, bodyData2)
-
 	local j = -(1 + e) * TLP2D_Vector_dot(rvx, rvy, normalX, normalY) / (invMass1 + invMass2)
 
 	do
@@ -1550,7 +2021,7 @@ local function bodyVelocityConstraintsDynamic(
 			local rpn1 = TLP2D_Vector_dot(rpx1, rpy1, normalX, normalY)
 			local rpn2 = TLP2D_Vector_dot(rpx2, rpy2, normalX, normalY)
 			local denom = invMass1 + invMass2 + rpn1 * rpn1 * invAngMass1 + rpn2 * rpn2 * invAngMass2
-			local j = -(1 + e) * cvm / denom / contactCount
+			local j = -(1 + e) * cvm / denom
 			bodyVelocityConstraintsDynamicJList[i] = j
 
 			local impX = j * normalX
@@ -1571,7 +2042,6 @@ local function bodyVelocityConstraintsDynamic(
 	av2 = bodyData2[BODY_DATA_ANGULAR_VELOCITY]
 
 	local staticFriction, dynamicFriction = bodyGetCombinedFrictions(bodyData1, bodyData2)
-	staticFriction, dynamicFriction = 1, 0.9
 
 	for i = 1, contactCount do
 		local rpx1, rpy1, rpx2, rpy2, rx1, ry1, rx2, ry2, rvx, rvy = bodyVelocityConstraintsDynamicCalParams(
@@ -1597,7 +2067,7 @@ local function bodyVelocityConstraintsDynamic(
 			local rpt1 = TLP2D_Vector_dot(rpx1, rpy1, tx, ty)
 			local rpt2 = TLP2D_Vector_dot(rpx2, rpy2, tx, ty)
 			local denom = invMass1 + invMass2 + rpt1 * rpt1 * invAngMass1 + rpt2 * rpt2 * invAngMass2
-			local jt = -TLP2D_Vector_dot(rvx, rvy, tx, ty) / denom / contactCount
+			local jt = -TLP2D_Vector_dot(rvx, rvy, tx, ty) / denom
 			local j = bodyVelocityConstraintsDynamicJList[i]
 
 			local impX, impY
@@ -1766,7 +2236,7 @@ local function TLP2D_Body_solveVelocityConstraints(
 				bodyData2,
 				bodyCache2,
 				bodyData1,
-				bodyCache2,
+				bodyCache1,
 				normalX,
 				normalY,
 				invMass2,
@@ -1875,9 +2345,20 @@ end
 TLP2D.Serializer = {}
 
 if env == ENV_LUA_JIT_WOS then -- WOS only
-	local LJBuffer = require("system.utils.serial.LJBuffer")
+	TLP2D.Serializer.type = "LJBuffer"
 
-	-- TODO
+	local LJBuffer = require("system.utils.serial.LJBuffer")
+	local encode = LJBuffer.encode
+	local decode = LJBuffer.decode
+
+	function TLP2D.Serializer.serialize(latestBodyID, bodiesData)
+		return encode({ latestBodyID, bodiesData })
+	end
+
+	function TLP2D.Serializer.deserialize(buffer)
+		local tbl = decode(buffer)
+		return tbl[1], tbl[2]
+	end
 elseif env == ENV_LUA_JIT then -- LuaJIT only
 	TLP2D.Serializer.type = "LJBuffer"
 
@@ -1927,9 +2408,13 @@ function TLP2D.World.create()
 	--- @class TLP2D.WorldData
 	local worldData = {}
 
-	worldLatestID = worldLatestID + 1
-	worldData.id = worldLatestID
+	local worldID = worldLatestID + 1
+	worldLatestID = worldID
 
+	--- @type TLP2D.WorldID
+	worldData.id = worldID
+
+	--- @type integer
 	worldData.iterations = TLP2D.World.DefaultIterations
 
 	--- @class TLP2D.BodyID : integer
@@ -1947,22 +2432,16 @@ function TLP2D.World.create()
 	--- @type TLP2D.Rectangle?
 	worldData.boundary = nil
 
-	--- @class (exact) TLP2D.WorldCollision
-	--- @field normalX number
-	--- @field normalY number
-	--- @field depth number
-	--- @field contactCount 1 | 2
-	--- @field contact1x number
-	--- @field contact1y number
-	--- @field contact2x number
-	--- @field contact2y number
+	--- TODO NOT DONE YET
+	--- @type TLP2D.SpatialHashMap?
+	worldData.spatialHashMap = nil -- TLP2D.SpatialHashMap.new(50)
 
-	--- @type TLP2D.WorldCollision[]
-	worldData.collisions = {}
+	--- @type TLP2D.BodyID[]
+	worldData.freeBodyIDList = {}
 
-	worldsData[worldLatestID] = worldData
+	worldsData[worldID] = worldData
 
-	return worldLatestID
+	return worldID
 end
 
 local TLP2D_World_create = TLP2D.World.create
@@ -1997,7 +2476,7 @@ local function worldGetDataOrError(worldID, extraLevel)
 	if worldData then
 		return worldData
 	end
-	error("bad argument to #1 'self': not a physics world", 3 + (extraLevel or 0))
+	error(("bad argument to #1 'worldID': world %s not a physics world"):format(worldID), 3 + (extraLevel or 0))
 end
 
 --- @param worldID TLP2D.WorldID
@@ -2033,13 +2512,19 @@ local function worldCreateBody(worldID, bodyType)
 
 	worldData.bodyIDs[#worldData.bodyIDs + 1] = bodyID
 
-	worldData.bodiesData[bodyID], worldData.bodyCaches[bodyID] = TLP2D_Body_create( --
+	local bodyCache
+	worldData.bodiesData[bodyID], bodyCache = TLP2D_Body_create( --
 		bodyID,
 		bodyType,
 		materialDefault.id,
 		TLP2D_Shape_Type_None,
 		0
 	)
+	worldData.bodyCaches[bodyID] = bodyCache
+
+	if worldData.spatialHashMap then
+		bodyCache.spatialHashMapElementID = worldData.spatialHashMap:addElement(bodyID)
+	end
 
 	return bodyID
 end
@@ -2077,9 +2562,15 @@ function TLP2D.World.destroyBody(worldID, bodyID)
 		error(("body %s does not exits in world %d"):format(bodyID, worldID), 2)
 	end
 
-	worldData.bodiesData[bodyID] = nil
-	worldData.bodyCaches[bodyID] = nil
-	TLP2D.Utils.listFastRemoveFirst(worldData.bodyIDs, bodyID)
+	local bodyCache = worldData.bodyCaches
+	if bodyCache[bodyID].spatialHashMapElementID then -- TODO
+	else
+		-- worldData.freeBodyIDList
+	end
+
+	bodiesData[bodyID] = nil
+	bodyCache[bodyID] = nil
+	TLP2D_Utils_listFastRemoveFirst(worldData.bodyIDs, bodyID)
 end
 
 local TLP2D_World_destroyBody = TLP2D.World.destroyBody
@@ -2096,6 +2587,16 @@ local function worldGetBodyDataOrError(worldID, bodyID)
 	end
 	error("bad argument to #2 'bodyID': body not found", 3)
 end
+
+--- @param worldID TLP2D.WorldID
+--- @param bodyID TLP2D.BodyID
+--- @return TLP2D.BodyType
+--- @nodiscard
+function TLP2D.World.getBodyType(worldID, bodyID)
+	return worldGetBodyDataOrError(worldID, bodyID)[BODY_DATA_TYPE]
+end
+
+local TLP2D_World_getBodyType = TLP2D.World.getBodyType
 
 --- @param worldID TLP2D.WorldID
 --- @param bodyID TLP2D.BodyID
@@ -2344,7 +2845,7 @@ local TLP2D_World_getBodyVertices = TLP2D.World.getBodyVertices
 --- @param bodyID TLP2D.BodyID
 --- @return number | TLP2D.Vertex[] dataRadiusOrVertices @return radius if the body is in circle shape, return vertices otherwise.
 --- @nodiscard
-function TLP2D.World.getBodyRadiusOrVertices(worldID, bodyID)
+function TLP2D.World.getBodyShapeRadiusOrVertices(worldID, bodyID)
 	local bodyData, worldData = worldGetBodyDataOrError(worldID, bodyID)
 	if bodyData[BODY_DATA_SHAPE] == TLP2D_Shape_Type_Circle then
 		return bodyData[BODY_DATA_SHAPE_DATA]
@@ -2353,7 +2854,7 @@ function TLP2D.World.getBodyRadiusOrVertices(worldID, bodyID)
 	end
 end
 
-local TLP2D_World_getBodyRadiusOrVertices = TLP2D.World.getBodyRadiusOrVertices
+local TLP2D_World_getBodyRadiusOrVertices = TLP2D.World.getBodyShapeRadiusOrVertices
 
 --- @param worldID TLP2D.WorldID
 --- @return fun(table: TLP2D.BodyID[], i?: integer): (i: integer, bodyID: TLP2D.BodyID) func
@@ -2388,12 +2889,94 @@ end
 
 local TLP2D_World_setIterations = TLP2D.World.setIterations
 
+--- @param worldData TLP2D.WorldData
+--- @param deltaTime number
+local function worldUpdateBodies(worldData, deltaTime)
+	local bodiesData = worldData.bodiesData
+	local bodyCaches = worldData.bodyCaches
+	local bodyIDs = worldData.bodyIDs
+	local spatialHashMap = worldData.spatialHashMap
+
+	for bodyIndex = 1, #bodyIDs do
+		local bodyID = bodyIDs[bodyIndex]
+		local bodyData = bodiesData[bodyID]
+		local bodyCache = bodyCaches[bodyID]
+
+		TLP2D_Body_update(bodyData, bodyCache, deltaTime)
+
+		if spatialHashMap and bodyCache.spatialHashMapElementID then
+			local aabb = TLP2D_Body_getTransformedAABB(bodyData, bodyCache)
+			spatialHashMap:updateElement(bodyCache.spatialHashMapElementID, aabb[1], aabb[2], aabb[3], aabb[4])
+		end
+	end
+end
+
+local function worldResolveBodyBoundaryCollision(bodyData, bodyCache, minX, minY, maxX, maxY)
+	local aabb = TLP2D_Body_getTransformedAABB(bodyData, bodyCache)
+	local px = bodyData[BODY_DATA_POSITION_X]
+	local py = bodyData[BODY_DATA_POSITION_Y]
+
+	local w = aabb[3] - aabb[1]
+	local h = aabb[4] - aabb[2]
+	local halfW = w * 0.5
+	local halfH = h * 0.5
+
+	local corrected
+
+	if aabb[1] < minX then
+		local depth = minX - aabb[1]
+		px = px + depth
+		corrected = 0
+	elseif aabb[3] > maxX then
+		local depth = aabb[3] - maxX
+		px = px - depth
+		corrected = 0
+	end
+
+	if aabb[2] < minY then
+		local pen = minY - aabb[2]
+		py = py + pen
+		corrected = 1
+	elseif aabb[4] > maxY then
+		local pen = aabb[4] - maxY
+		py = py - pen
+		corrected = 1
+	end
+
+	if w >= (maxX - minX) then
+		px = (minX + maxX) * 0.5
+		corrected = 0
+	else
+		px = math_max(px, minX + halfW)
+		px = math_min(px, maxX - halfW)
+	end
+
+	if h >= (maxY - minY) then
+		py = (minY + maxY) * 0.5
+		corrected = 1
+	else
+		py = math_max(py, minY + halfH)
+		py = math_min(py, maxY - halfH)
+	end
+
+	if corrected ~= nil then
+		bodyData[BODY_DATA_POSITION_X] = px
+		bodyData[BODY_DATA_POSITION_Y] = py
+		if corrected == 0 then
+			bodyData[BODY_DATA_LINEAR_VELOCITY_X] = 0
+		else
+			bodyData[BODY_DATA_LINEAR_VELOCITY_Y] = 0
+		end
+		bodyCache.needUpdateTransform = true
+	end
+end
+
 --- @param bodyData1 TLP2D.BodyData
 --- @param bodyCache1 TLP2D.BodyCache
 --- @param bodyData2 TLP2D.BodyData
 --- @param bodyCache2 TLP2D.BodyCache
 local function worldCollisionResolveCircleWithCircle(bodyData1, bodyCache1, bodyData2, bodyCache2)
-	local intersect = TLP2D_Collision_intersectCircleWithCircle(
+	local depth, normalX, normalY = TLP2D_Collision_intersectCircleWithCircle(
 		bodyData1[BODY_DATA_POSITION_X],
 		bodyData1[BODY_DATA_POSITION_Y],
 		bodyData1[BODY_DATA_SHAPE_DATA],
@@ -2401,10 +2984,8 @@ local function worldCollisionResolveCircleWithCircle(bodyData1, bodyCache1, body
 		bodyData2[BODY_DATA_POSITION_Y],
 		bodyData2[BODY_DATA_SHAPE_DATA]
 	)
-	if intersect then
-		local normalX = intersect.normalX
-		local normalY = intersect.normalY
-		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, intersect.depth)
+	if depth then
+		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, depth)
 		local contact = TLP2D_Collision_contactCircleWithCircle( --
 			bodyData1[BODY_DATA_POSITION_X],
 			bodyData1[BODY_DATA_POSITION_Y],
@@ -2430,7 +3011,7 @@ end
 --- @param bodyData2 TLP2D.BodyData
 --- @param bodyCache2 TLP2D.BodyCache
 local function worldCollisionResolveCircleWithPolygon(bodyData1, bodyCache1, bodyData2, bodyCache2)
-	local intersect = Collision_intersectPolygonWithCircle(
+	local depth, normalX, normalY = Collision_intersectPolygonWithCircle(
 		bodyData2[BODY_DATA_POSITION_X],
 		bodyData2[BODY_DATA_POSITION_Y],
 		TLP2D_Body_getTransformedVertices(bodyData2, bodyCache2),
@@ -2438,10 +3019,8 @@ local function worldCollisionResolveCircleWithPolygon(bodyData1, bodyCache1, bod
 		bodyData1[BODY_DATA_POSITION_Y],
 		bodyData1[BODY_DATA_SHAPE_DATA]
 	)
-	if intersect then
-		local normalX = intersect.normalX
-		local normalY = intersect.normalY
-		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, intersect.depth)
+	if depth then
+		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, depth)
 		local contact = TLP2D_Collision_contactPolygonWithCircle(
 			bodyData2[BODY_DATA_POSITION_X],
 			bodyData2[BODY_DATA_POSITION_Y],
@@ -2467,7 +3046,7 @@ end
 --- @param bodyData2 TLP2D.BodyData
 --- @param bodyCache2 TLP2D.BodyCache
 local function worldCollisionResolvePolygonWithPolygon(bodyData1, bodyCache1, bodyData2, bodyCache2)
-	local intersect = TLP2D_Collision_intersectPolygonWithPolygon( --
+	local depth, normalX, normalY = TLP2D_Collision_intersectPolygonWithPolygon( --
 		bodyData1[BODY_DATA_POSITION_X],
 		bodyData1[BODY_DATA_POSITION_Y],
 		TLP2D_Body_getTransformedVertices(bodyData1, bodyCache1),
@@ -2475,10 +3054,8 @@ local function worldCollisionResolvePolygonWithPolygon(bodyData1, bodyCache1, bo
 		bodyData2[BODY_DATA_POSITION_Y],
 		TLP2D_Body_getTransformedVertices(bodyData2, bodyCache2)
 	)
-	if intersect then
-		local normalX = intersect.normalX
-		local normalY = intersect.normalY
-		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, intersect.depth)
+	if depth then
+		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, depth)
 		local contact = TLP2D_Collision_contactPolygonWithPolygon(
 			TLP2D_Body_getTransformedVertices(bodyData1, bodyCache1),
 			TLP2D_Body_getTransformedVertices(bodyData2, bodyCache2)
@@ -2500,102 +3077,55 @@ end
 --- @param bodyCache1 TLP2D.BodyCache
 --- @param bodyData2 TLP2D.BodyData
 --- @param bodyCache2 TLP2D.BodyCache
---- @return TLP2D.IntersectionResult?
---- @return TLP2D.ContactResult
-local function worldCollisionResolvePolygonWithCircle(bodyData1, bodyCache1, bodyData2, bodyCache2)
-	local intersect = Collision_intersectPolygonWithCircle(
-		bodyData1[BODY_DATA_POSITION_X],
-		bodyData1[BODY_DATA_POSITION_Y],
-		TLP2D_Body_getTransformedVertices(bodyData1, bodyCache1),
-		bodyData2[BODY_DATA_POSITION_X],
-		bodyData2[BODY_DATA_POSITION_Y],
-		bodyData2[BODY_DATA_SHAPE_DATA]
-	)
-	if intersect then
-		local normalX = -intersect.normalX
-		local normalY = -intersect.normalY
-		bodySolvePositionConstraints(bodyData1, bodyCache1, bodyData2, bodyCache2, normalX, normalY, intersect.depth)
-		local contact = TLP2D_Collision_contactPolygonWithCircle(
-			bodyData1[BODY_DATA_POSITION_X],
-			bodyData1[BODY_DATA_POSITION_Y],
-			TLP2D_Body_getTransformedVertices(bodyData1, bodyCache1),
-			bodyData2[BODY_DATA_POSITION_X],
-			bodyData2[BODY_DATA_POSITION_Y]
-		)
-		TLP2D_Body_solveVelocityConstraints( --
-			bodyData1,
-			bodyCache1,
-			bodyData2,
-			bodyCache2,
-			normalX,
-			normalY,
-			contact.count,
-			contact.list
-		)
-		return intersect, contact
+local function worldResolveBodiesCollisionNarrowly(bodyData1, bodyCache1, bodyData2, bodyCache2)
+	if bodyData1[BODY_DATA_SHAPE] == TLP2D_Shape_Type_Circle then
+		if bodyData2[BODY_DATA_SHAPE] == TLP2D_Shape_Type_Circle then
+			worldCollisionResolveCircleWithCircle(bodyData1, bodyCache1, bodyData2, bodyCache2)
+		else
+			worldCollisionResolveCircleWithPolygon(bodyData1, bodyCache1, bodyData2, bodyCache2)
+		end
 	else
-		return nil, contactResult
-	end
-end
-
---- @type table<TLP2D.BodyShape, table<TLP2D.BodyShape, fun(bodyData1: TLP2D.BodyData, bodyCache1: TLP2D.BodyCache, bodyData2: TLP2D.BodyData, bodyCache2: TLP2D.BodyCache): TLP2D.IntersectionResult?, TLP2D.ContactResult>>
-local worldBodyResolveCollisionNarrowlyFunctions = {
-	{ -- Circle
-		worldCollisionResolveCircleWithCircle, -- Circle
-		worldCollisionResolveCircleWithPolygon, -- Rectangle
-	},
-	{ -- Rectangle
-		worldCollisionResolvePolygonWithCircle, -- Circle
-		worldCollisionResolvePolygonWithPolygon, -- Rectangle
-	},
-}
-
---- @param worldData TLP2D.WorldData
---- @param bodyID TLP2D.BodyID
---- @param bodyData TLP2D.BodyData
---- @param bodyCache TLP2D.BodyCache
-local function worldBodyResolveCollision(worldData, bodyID, bodyData, bodyCache)
-	local resolveNarrowFunctions = worldBodyResolveCollisionNarrowlyFunctions[bodyData[BODY_DATA_SHAPE]]
-	if not resolveNarrowFunctions then
-		return
-	end
-
-	local bodiesData = worldData.bodiesData
-	local bodyCaches = worldData.bodyCaches
-
-	local bodyAABB = TLP2D_Body_getTransformedAABB(bodyData, bodyCache)
-
-	for _, possibleBodyID in ipairs(worldData.bodyIDs) do
-		if bodyID < possibleBodyID then
-			local possibleBodyData = bodiesData[possibleBodyID]
-			local resolve = resolveNarrowFunctions[possibleBodyData[BODY_DATA_SHAPE]]
-			if resolve then
-				local possibleBodyCache = bodyCaches[possibleBodyID]
-				if
-					TLP2D_Collision_checkAABB(
-						bodyAABB,
-						TLP2D_Body_getTransformedAABB(possibleBodyData, possibleBodyCache)
-					)
-				then
-					resolve(bodyData, bodyCache, possibleBodyData, possibleBodyCache)
-				end
-			end
+		if bodyData2[BODY_DATA_SHAPE] == TLP2D_Shape_Type_Circle then
+			worldCollisionResolveCircleWithPolygon(bodyData2, bodyCache2, bodyData1, bodyCache1)
+		else
+			worldCollisionResolvePolygonWithPolygon(bodyData1, bodyCache1, bodyData2, bodyCache2)
 		end
 	end
 end
 
 --- @param worldData TLP2D.WorldData
---- @param deltaTime number
-local function worldTick(worldData, deltaTime)
+--- @param bodyID TLP2D.BodyID
+local function worldResolveBodyCollisions(worldData, bodyID)
 	local bodiesData = worldData.bodiesData
 	local bodyCaches = worldData.bodyCaches
 
-	for _, bodyID in ipairs(worldData.bodyIDs) do
-		TLP2D_Body_update(bodiesData[bodyID], bodyCaches[bodyID], deltaTime)
+	local bodyData = bodiesData[bodyID]
+	local bodyCache = bodyCaches[bodyID]
+
+	-- resolve world boundary collisions
+
+	local boundary = worldData.boundary
+	if boundary and bodyData[BODY_DATA_TYPE] ~= TLP2D_Body_Type_Static then
+		worldResolveBodyBoundaryCollision(bodyData, bodyCache, boundary[1], boundary[2], boundary[3], boundary[4])
 	end
 
-	for _, bodyID in ipairs(worldData.bodyIDs) do
-		worldBodyResolveCollision(worldData, bodyID, bodiesData[bodyID], bodyCaches[bodyID])
+	-- resolve collisions each other
+
+	for _, possibleBodyID in ipairs(worldData.bodyIDs) do
+		if
+			bodyID ~= possibleBodyID
+			and TLP2D_Collision_checkAABB(
+				TLP2D_Body_getTransformedAABB(bodyData, bodyCache),
+				TLP2D_Body_getTransformedAABB(bodiesData[possibleBodyID], bodyCaches[possibleBodyID])
+			)
+		then
+			worldResolveBodiesCollisionNarrowly(
+				bodyData,
+				bodyCache,
+				bodiesData[possibleBodyID],
+				bodyCaches[possibleBodyID]
+			)
+		end
 	end
 end
 
@@ -2612,9 +3142,15 @@ function TLP2D.World.tick(worldID, deltaTime)
 	deltaTime = deltaTime / worldData.iterations
 
 	for _ = 1, worldData.iterations do
-		worldTick(worldData, deltaTime)
+		worldUpdateBodies(worldData, deltaTime)
+
+		for _, bodyID in ipairs(worldData.bodyIDs) do
+			worldResolveBodyCollisions(worldData, bodyID)
+		end
 	end
 end
+
+local TLP2D_World_tick = TLP2D.World.tick
 
 --- @param worldID TLP2D.WorldID
 --- @param x number
@@ -2668,6 +3204,14 @@ function TLP2D.World.setBoundary(worldID, minX, minY, maxX, maxY)
 end
 
 local TLP2D_World_setBoundary = TLP2D.World.setBoundary
+
+function TLP2D.World.getGridSize(worldID)
+	return worldGetDataOrError(worldID).spatialHashMap._gridSize
+end
+
+--- @param worldID TLP2D.WorldID
+--- @param size number
+function TLP2D.World.setGridSize(worldID, size) end
 
 --- @param worldID TLP2D.WorldID
 function TLP2D.World.serialize(worldID)
@@ -2724,78 +3268,6 @@ end
 TLP2D.Object = not not setObjectMetatable
 
 if setObjectMetatable then
-	--#region World Object
-
-	--- @readonly
-	--- @class TLP2D.WorldObject
-	--- @field package _worldID TLP2D.WorldID
-	TLP2D.WorldObject = {}
-
-	--- @return TLP2D.WorldObject
-	function TLP2D.WorldObject.new()
-		local worldObject = {
-			_worldID = TLP2D_World_create(),
-			_bodyObjects = {},
-		}
-		setObjectMetatable(worldObject, TLP2D.WorldObject, TLP2D.WorldObject.delete)
-		return worldObject
-	end
-
-	function TLP2D.WorldObject:delete()
-		if self._worldID ~= 0 then
-			TLP2D_World_destroy(self._worldID)
-			self._worldID = 0
-		end
-	end
-
-	--- @return TLP2D.WorldID worldID
-	--- @nodiscard
-	function TLP2D.WorldObject:getID()
-		return self._worldID
-	end
-
-	--- @return boolean
-	--- @nodiscard
-	function TLP2D.WorldObject:exists()
-		return TLP2D_World_exists(self._worldID)
-	end
-
-	--- @param x number
-	--- @param y number
-	function TLP2D.WorldObject:applyGravity(x, y)
-		TLP2D_World_applyGravity(self._worldID, x, y)
-	end
-
-	--- @return number? minX
-	--- @return number minY
-	--- @return number maxX
-	--- @return number maxY
-	--- @nodiscard
-	function TLP2D.WorldObject:getBoundary()
-		return TLP2D_World_getBoundary(self._worldID)
-	end
-
-	--- @return integer iterations
-	--- @nodiscard
-	function TLP2D.WorldObject:getIterations()
-		return TLP2D_World_getIterations(self._worldID)
-	end
-
-	--- @param minX number?
-	--- @param minY number?
-	--- @param maxX number?
-	--- @param maxY number?
-	function TLP2D.WorldObject:setBoundary(minX, minY, maxX, maxY)
-		TLP2D_World_setBoundary(self._worldID, minX, minY, maxX, maxY)
-	end
-
-	--- @param iterations integer
-	function TLP2D.WorldObject:setIterations(iterations)
-		TLP2D_World_setIterations(self._worldID, iterations)
-	end
-
-	--#endregion
-
 	--#region Body Object
 
 	--- @readonly
@@ -2804,55 +3276,17 @@ if setObjectMetatable then
 	--- @field package _bodyID TLP2D.BodyID
 	TLP2D.BodyObject = {}
 
-	--- @param world TLP2D.WorldObject
-	--- @param create function
-	--- @return TLP2D.BodyObject
-	local function bodyObjectNew(world, create)
-		--- @type TLP2D.BodyObject
-		local bodyObject = {
-			_world = world,
-			_bodyID = create(world._worldID),
-		}
-		setObjectMetatable(bodyObject, TLP2D.BodyObject, TLP2D.BodyObject.delete)
-		return bodyObject
-	end
-
-	--- @param world TLP2D.WorldObject
-	--- @return TLP2D.BodyObject
-	--- @nodiscard
-	function TLP2D.BodyObject.newStatic(world)
-		return bodyObjectNew(world, TLP2D_World_createStaticBody)
-	end
-
-	--- @param world TLP2D.WorldObject
-	--- @return TLP2D.BodyObject
-	--- @nodiscard
-	function TLP2D.BodyObject.newKinematic(world)
-		return bodyObjectNew(world, TLP2D_World_createKinematicBody)
-	end
-
-	--- @param world TLP2D.WorldObject
-	--- @return TLP2D.BodyObject
-	--- @nodiscard
-	function TLP2D.BodyObject.newDynamic(world)
-		return bodyObjectNew(world, TLP2D_World_createDynamicBody)
-	end
-
 	--- @return boolean success
 	function TLP2D.BodyObject:delete()
 		if self._bodyID ~= 0 then
+			TLP2D_Utils_listFastRemoveFirst(self._world._bodies, self)
 			TLP2D_World_destroyBody(self._world._worldID, self._bodyID)
 			self._bodyID = 0
+
 			return true
 		else
 			return false
 		end
-	end
-
-	--- @return boolean
-	--- @nodiscard
-	function TLP2D.BodyObject:isValid()
-		return TLP2D_World_hasBody(self._world._worldID, self._bodyID)
 	end
 
 	--- @return TLP2D.BodyID
@@ -2887,6 +3321,11 @@ if setObjectMetatable then
 	--- @param dav number
 	function TLP2D.BodyObject:changeAngularVelocity(dav)
 		TLP2D_World_changeBodyAngularVelocity(self._world._worldID, self._bodyID, dav)
+	end
+
+	--- @return TLP2D.BodyType
+	function TLP2D.BodyObject:getType()
+		return TLP2D_World_getBodyType(self._world._worldID, self._bodyID)
 	end
 
 	--- @return number x
@@ -2968,6 +3407,137 @@ if setObjectMetatable then
 	--- @param height number
 	function TLP2D.BodyObject:setShapeRectangle(width, height)
 		TLP2D_World_setBodyShapeRectangle(self._world._worldID, self._bodyID, width, height)
+	end
+
+	--#endregion
+
+	--#region World Object
+
+	--- @readonly
+	--- @class TLP2D.WorldObject
+	--- @field package _worldID TLP2D.WorldID
+	--- @field package _bodies TLP2D.BodyObject[]
+	TLP2D.WorldObject = {}
+
+	--- @return TLP2D.WorldObject
+	function TLP2D.WorldObject.new()
+		--- @type TLP2D.WorldObject
+		local worldObject = {
+			_worldID = TLP2D_World_create(),
+			_bodies = {},
+		}
+		setObjectMetatable(worldObject, TLP2D.WorldObject, TLP2D.WorldObject.delete)
+		return worldObject
+	end
+
+	function TLP2D.WorldObject:delete()
+		if self._worldID ~= 0 then
+			self:clearBodies()
+
+			TLP2D_World_destroy(self._worldID)
+			self._worldID = 0
+		end
+	end
+
+	--- @return TLP2D.WorldID worldID
+	--- @nodiscard
+	function TLP2D.WorldObject:getID()
+		return self._worldID
+	end
+
+	--- @return boolean
+	--- @nodiscard
+	function TLP2D.WorldObject:exists()
+		return TLP2D_World_exists(self._worldID)
+	end
+
+	--- @param self TLP2D.WorldObject
+	--- @param create function
+	--- @return TLP2D.BodyObject
+	local function newBodyObject(self, create)
+		--- @type TLP2D.BodyObject
+		local bodyObject = {
+			_world = self,
+			_bodyID = create(self._worldID),
+		}
+		setObjectMetatable(bodyObject, TLP2D.BodyObject, TLP2D.BodyObject.delete)
+		self._bodies[#self._bodies + 1] = bodyObject
+		return bodyObject
+	end
+
+	--- @return TLP2D.BodyObject
+	function TLP2D.WorldObject:newStaticBody()
+		return newBodyObject(self, TLP2D_World_createStaticBody)
+	end
+
+	--- @return TLP2D.BodyObject
+	function TLP2D.WorldObject:newKinematicBody()
+		return newBodyObject(self, TLP2D_World_createKinematicBody)
+	end
+
+	--- @return TLP2D.BodyObject
+	function TLP2D.WorldObject:newDynamicBody()
+		return newBodyObject(self, TLP2D_World_createDynamicBody)
+	end
+
+	--- @nodiscard
+	function TLP2D.WorldObject:getBodyCount()
+		return #self._bodies
+	end
+
+	--- @nodiscard
+	function TLP2D.WorldObject:iterateBodies()
+		return ipairs(self._bodies)
+	end
+
+	function TLP2D.WorldObject:clearBodies()
+		local bodies = self._bodies
+		self._bodies = {}
+
+		for _, bodyObject in ipairs(bodies) do
+			bodyObject:delete()
+		end
+
+		TLP2D_World_clearBodies(self._worldID)
+	end
+
+	--- @param x number
+	--- @param y number
+	function TLP2D.WorldObject:applyGravity(x, y)
+		TLP2D_World_applyGravity(self._worldID, x, y)
+	end
+
+	--- @return number? minX
+	--- @return number minY
+	--- @return number maxX
+	--- @return number maxY
+	--- @nodiscard
+	function TLP2D.WorldObject:getBoundary()
+		return TLP2D_World_getBoundary(self._worldID)
+	end
+
+	--- @return integer iterations
+	--- @nodiscard
+	function TLP2D.WorldObject:getIterations()
+		return TLP2D_World_getIterations(self._worldID)
+	end
+
+	--- @param minX number?
+	--- @param minY number?
+	--- @param maxX number?
+	--- @param maxY number?
+	function TLP2D.WorldObject:setBoundary(minX, minY, maxX, maxY)
+		TLP2D_World_setBoundary(self._worldID, minX, minY, maxX, maxY)
+	end
+
+	--- @param iterations integer
+	function TLP2D.WorldObject:setIterations(iterations)
+		TLP2D_World_setIterations(self._worldID, iterations)
+	end
+
+	--- @param deltaTime number
+	function TLP2D.WorldObject:tick(deltaTime)
+		TLP2D_World_tick(self._worldID, deltaTime)
 	end
 
 	--#endregion

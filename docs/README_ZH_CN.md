@@ -27,12 +27,14 @@
 
 ### v1.0
 
-- [ ] feature: Support polygon shape & predef polygon shape.
-- [ ] feature: Add world serializer.
+- [ ] *feature* Support polygon shape.
+- [ ] *feature* Add world serializer.
 
 ### 未来 (如果可能)
 
-- [ ] perf: Dynamic-AABB-Tree for static type bodies.
-- [ ] perf: Spatial-Hash-Map for dynamic type bodies.
-- [ ] stability: Sleep dynamic type bodies.
-- [ ] feature: Add more constraints: Joints.
+- [ ] *feature* Support predef polygon shape.
+- [ ] Add examples.
+- [ ] *perf* Dynamic-AABB-Tree for static type bodies.
+- [ ] *perf* Spatial-Hash-Map for dynamic type bodies.
+- [ ] *stability* Sleep dynamic type bodies.
+- [ ] *feature* Add more constraints: Joints.

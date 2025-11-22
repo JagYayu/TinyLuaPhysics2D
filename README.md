@@ -9,7 +9,8 @@
 
 ## Intro
 
-This is a tiny 2D physics engine purely written in Lua, providing a straightforward 2D physics simulation system for constrained development environments.
+This is a tiny 2D physics engine written in pure Lua, providing a straightforward 2D physics simulation system for constrained development environments.
+Considering the maintainability of the lua code, there're no aggressive optimizations, therefore its about 50 times slower than mature physics engines (like `Box2d`).
 
 - Contains only a single file with no external dependencies, making it easy to integrate into existing projects.
 - Can run in most sandboxed or restricted environments.
@@ -27,12 +28,13 @@ This is a tiny 2D physics engine purely written in Lua, providing a straightforw
 
 ### v1.0
 
-- [ ] *feature* Support polygon shape & predef polygon shape.
+- [ ] *feature* Support polygon shape.
 - [ ] *feature* Add world serializer.
-- [ ] Add examples.
 
 ### Future (If possible)
 
+- [ ] *feature* Support predef polygon shape.
+- [ ] Add examples.
 - [ ] *perf* Dynamic-AABB-Tree for static type bodies.
 - [ ] *perf* Spatial-Hash-Map for dynamic type bodies.
 - [ ] *stability* Sleep dynamic type bodies.
